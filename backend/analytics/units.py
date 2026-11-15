@@ -1,4 +1,3 @@
-"""Owner: backend developer 2 (analytics)."""
 from __future__ import annotations
 
 MGDL_PER_MMOL = 18.016
