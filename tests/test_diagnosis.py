@@ -1,4 +1,3 @@
-"""Owner: backend developer 1 (diagnosis engine)."""
 import os
 import tempfile
 import unittest
