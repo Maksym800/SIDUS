@@ -1,4 +1,3 @@
-"""Owner: data engineer (Pandas + SQLite)."""
 from __future__ import annotations
 
 import random
