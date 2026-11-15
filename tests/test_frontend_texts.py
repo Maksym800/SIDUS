@@ -1,4 +1,3 @@
-"""Owner: frontend developer (Streamlit)."""
 import re
 import string
 import unittest
