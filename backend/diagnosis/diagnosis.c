@@ -1,4 +1,3 @@
-/* Owner: backend developer 1 (diagnosis engine, C part). */
 #include "diagnosis.h"
 
 #include <math.h>
