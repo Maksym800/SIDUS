@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+astro_health.db
+astro_health.db-journal
+
+backend/diagnosis/*.so
+backend/diagnosis/*.dylib
+backend/diagnosis/*.dll
+backend/diagnosis/*.new
+
+.vscode/
+.idea/

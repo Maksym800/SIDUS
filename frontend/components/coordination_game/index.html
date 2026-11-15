@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<!-- Owner: frontend developer (Streamlit). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordination test</title>
+<style>
+  :root {
+    --bg: #15323d;
+    --text: #f2efe9;
+    --button: #52b788;
+    --accent: #9cb8bf;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body {
+    color: var(--text);
+    font-family: "Source Sans Pro", "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+  }
+  #hud {
+    display: flex; justify-content: space-between; gap: 1rem;
+    padding: 0 2px 8px; color: var(--accent); font-size: 0.95rem;
+  }
+  #hud b {
+    color: var(--text); font-weight: 600; font-size: 1.25rem; margin-left: 0.35rem;
+    font-family: "Bahnschrift", "DIN Alternate", "Avenir Next Condensed", "Roboto Condensed",
+      "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  #stage { position: relative; }
+  #field {
+    display: block; width: 100%; height: 420px;
+    border: 1px solid var(--accent); border-radius: 8px;
+    background: var(--bg); cursor: crosshair; touch-action: none;
+  }
+  #overlay {
+    position: absolute; left: 0; right: 0; bottom: 22px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    pointer-events: none; text-align: center; padding: 0 16px;
+  }
+  #overlay[hidden] { display: none; }
+  #message { margin: 0; max-width: 46ch; line-height: 1.4; }
+  #message.result {
+    font-size: 1.7rem; font-weight: 600;
+    font-family: "Bahnschrift", "DIN Alternate", "Avenir Next Condensed", "Roboto Condensed",
+      "Arial Narrow", sans-serif;
+  }
+  #start {
+    pointer-events: auto; cursor: pointer;
+    padding: 0.5rem 1.4rem; border-radius: 6px; border: 1px solid var(--button);
+    background: var(--button); color: var(--bg); font: inherit; font-weight: 600;
+  }
+  #start:hover { filter: brightness(1.1); }
+  #start:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span><span id="time-label"></span><b id="time-value"></b></span>
+  <span><span id="score-label"></span><b id="score-value"></b></span>
+</div>
+<div id="stage">
+  <canvas id="field"></canvas>
+  <div id="overlay">
+    <p id="message"></p>
+    <button id="start" type="button"></button>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SAMPLE_MS = 1000 / 30;
+  var COUNTDOWN_S = 3;
+  var MAX_FRAME_MS = 50;
+  var WALL_MARGIN = 34;
+
+
+  var config = {
+    duration: 30,
+    radius: 32,
+    labels: {
+      start: "Start test", again: "Run again",
+      ready: "Put the cursor on the ship and press the button.",
+      get_ready: "Get ready", time: "Time left", on_target: "On the ship",
+      finished: "Test finished", seconds: "s"
+    },
+    colors: { background: "#15323d", text: "#f2efe9", button: "#52b788", accent: "#9cb8bf" }
+  };
+
+  var canvas = document.getElementById("field");
+  var ctx = canvas.getContext("2d");
+  var overlay = document.getElementById("overlay");
+  var message = document.getElementById("message");
+  var startButton = document.getElementById("start");
+  var timeLabel = document.getElementById("time-label");
+  var timeValue = document.getElementById("time-value");
+  var scoreLabel = document.getElementById("score-label");
+  var scoreValue = document.getElementById("score-value");
+
+  var width = 0, height = 0;
+  var phase = "idle";
+  var ship = { x: 0, y: 0, heading: -Math.PI / 2, speed: 0, targetSpeed: 0, turn: 0, nextJerk: 0 };
+  var cursor = { x: 0, y: 0, inside: false };
+  var stars = [];
+  var samples = [];
+  var hits = 0;
+  var elapsedMs = 0;
+  var countdownMs = 0;
+  var lastFrame = null;
+  var lastResult = null;
+
+
+  function send(type, data) {
+    if (window.parent === window) return;
+    var payload = { isStreamlitMessage: true, type: type };
+    for (var key in data) payload[key] = data[key];
+    window.parent.postMessage(payload, "*");
+  }
+
+  function reportHeight() {
+    send("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight });
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    applyArguments(event.data.args || {});
+  });
+
+  function applyArguments(args) {
+    var name;
+    if (typeof args.duration === "number" && args.duration > 0 && phase !== "running") {
+      config.duration = args.duration;
+    }
+    if (typeof args.radius === "number" && args.radius > 0 && phase !== "running") {
+      config.radius = args.radius;
+    }
+    if (args.labels) for (name in args.labels) config.labels[name] = String(args.labels[name]);
+    if (args.colors) for (name in args.colors) config.colors[name] = String(args.colors[name]);
+    var root = document.documentElement.style;
+    root.setProperty("--bg", config.colors.background);
+    root.setProperty("--text", config.colors.text);
+    root.setProperty("--button", config.colors.button);
+    root.setProperty("--accent", config.colors.accent);
+    refreshTexts();
+    reportHeight();
+  }
+
+
+  function totalSamples() {
+    return Math.round(config.duration * 1000 / SAMPLE_MS);
+  }
+
+  function percentOnShip() {
+    return samples.length ? Math.round(hits / samples.length * 100) : 0;
+  }
+
+  function refreshTexts() {
+    var labels = config.labels;
+    timeLabel.textContent = labels.time;
+    scoreLabel.textContent = labels.on_target;
+    var left = phase === "running" ? Math.max(0, config.duration - elapsedMs / 1000) : config.duration;
+    if (phase === "finished") left = 0;
+    timeValue.textContent = Math.ceil(left) + " " + labels.seconds;
+    scoreValue.textContent = (phase === "finished" ? lastResult : percentOnShip()) + "%";
+
+    overlay.hidden = phase === "countdown" || phase === "running";
+    message.className = phase === "finished" ? "result" : "";
+    if (phase === "finished") {
+      message.textContent = labels.finished + ": " + lastResult + "%";
+      startButton.textContent = labels.again;
+    } else {
+      message.textContent = labels.ready;
+      startButton.textContent = labels.start;
+    }
+  }
+
+
+  function resize() {
+    var ratio = window.devicePixelRatio || 1;
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    stars = [];
+    for (var i = 0; i < 70; i++) {
+      stars.push({ x: Math.random() * width, y: Math.random() * height,
+                   r: 0.6 + Math.random() * 1.1, a: 0.15 + Math.random() * 0.45 });
+    }
+    if (phase === "idle" || phase === "finished") centreShip();
+    keepInside();
+  }
+
+  function centreShip() {
+    ship.x = width / 2;
+    ship.y = height / 2 - 30;
+    ship.heading = -Math.PI / 2;
+    ship.speed = 0;
+  }
+
+  function keepInside() {
+    ship.x = Math.min(Math.max(ship.x, WALL_MARGIN), Math.max(WALL_MARGIN, width - WALL_MARGIN));
+    ship.y = Math.min(Math.max(ship.y, WALL_MARGIN), Math.max(WALL_MARGIN, height - WALL_MARGIN));
+  }
+
+  function speedScale() {
+    return Math.min(1.25, Math.max(0.7, width / 760));
+  }
+
+
+  function pickSpeed() {
+    return speedScale() * (115 + Math.random() * 125);
+  }
+
+  function moveShip(dt) {
+
+    ship.turn += (Math.random() - 0.5) * 9 * dt;
+    ship.turn = Math.min(Math.max(ship.turn, -2.6), 2.6);
+    ship.heading += ship.turn * dt;
+
+
+    ship.nextJerk -= dt;
+    if (ship.nextJerk <= 0) {
+      ship.heading += (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 1.6);
+      ship.turn = (Math.random() - 0.5) * 3;
+      ship.targetSpeed = pickSpeed();
+      ship.nextJerk = 0.6 + Math.random() * 1.2;
+    }
+
+    ship.speed += (ship.targetSpeed - ship.speed) * Math.min(1, 4 * dt);
+    ship.x += Math.cos(ship.heading) * ship.speed * dt;
+    ship.y += Math.sin(ship.heading) * ship.speed * dt;
+
+
+    if (ship.x < WALL_MARGIN || ship.x > width - WALL_MARGIN) {
+      ship.heading = Math.PI - ship.heading;
+      ship.turn = 0;
+    }
+    if (ship.y < WALL_MARGIN || ship.y > height - WALL_MARGIN) {
+      ship.heading = -ship.heading;
+      ship.turn = 0;
+    }
+    keepInside();
+  }
+
+
+  function distanceToShip() {
+    if (!cursor.inside) return -1;
+    var dx = cursor.x - ship.x, dy = cursor.y - ship.y;
+    return Math.round(Math.sqrt(dx * dx + dy * dy) * 10) / 10;
+  }
+
+  function onShip() {
+    var distance = distanceToShip();
+    return distance >= 0 && distance <= config.radius;
+  }
+
+  function recordSamples() {
+    var wanted = Math.min(totalSamples(), Math.floor(elapsedMs / SAMPLE_MS));
+    while (samples.length < wanted) {
+      var distance = distanceToShip();
+      samples.push(distance);
+      if (distance >= 0 && distance <= config.radius) hits++;
+    }
+  }
+
+  function startTest() {
+    samples = [];
+    hits = 0;
+    elapsedMs = 0;
+    lastResult = null;
+    centreShip();
+    ship.turn = 0;
+    ship.targetSpeed = pickSpeed();
+    ship.nextJerk = 0.5;
+    countdownMs = COUNTDOWN_S * 1000;
+    phase = "countdown";
+    refreshTexts();
+  }
+
+  function finishTest() {
+    phase = "finished";
+    lastResult = percentOnShip();
+    ship.speed = 0;
+    refreshTexts();
+    send("streamlit:setComponentValue", {
+      dataType: "json",
+      value: {
+        id: Date.now(),
+        radius_px: config.radius,
+        interval_ms: SAMPLE_MS,
+        duration_s: config.duration,
+        distances: samples
+      }
+    });
+  }
+
+
+  function drawShip(lit) {
+    var colors = config.colors;
+
+    ctx.beginPath();
+    ctx.arc(ship.x, ship.y, config.radius, 0, Math.PI * 2);
+    ctx.lineWidth = lit ? 2 : 1;
+    ctx.strokeStyle = lit ? colors.button : colors.accent;
+    ctx.globalAlpha = lit ? 0.95 : 0.4;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.save();
+    ctx.translate(ship.x, ship.y);
+    ctx.rotate(ship.heading);
+    if (ship.speed > 20) {
+      var flame = 9 + Math.random() * 7;
+      ctx.beginPath();
+      ctx.moveTo(-9, -4.5);
+      ctx.lineTo(-9 - flame, 0);
+      ctx.lineTo(-9, 4.5);
+      ctx.closePath();
+      ctx.fillStyle = "#e9c46a";
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.moveTo(-3, -6);
+    ctx.lineTo(-13, -12);
+    ctx.lineTo(-10, -4);
+    ctx.lineTo(-10, 4);
+    ctx.lineTo(-13, 12);
+    ctx.lineTo(-3, 6);
+    ctx.closePath();
+    ctx.fillStyle = colors.accent;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(17, 0);
+    ctx.quadraticCurveTo(6, -8.5, -10, -6);
+    ctx.lineTo(-10, 6);
+    ctx.quadraticCurveTo(6, 8.5, 17, 0);
+    ctx.closePath();
+    ctx.fillStyle = colors.text;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(4, 0, 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = colors.background;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function draw() {
+    var colors = config.colors;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = colors.accent;
+    for (var i = 0; i < stars.length; i++) {
+      ctx.globalAlpha = stars[i].a;
+      ctx.beginPath();
+      ctx.arc(stars[i].x, stars[i].y, stars[i].r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    drawShip(onShip());
+
+    if (phase === "countdown") {
+      ctx.fillStyle = colors.text;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = '600 22px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(config.labels.get_ready, width / 2, height - 96);
+      ctx.font = '600 64px "Bahnschrift", "DIN Alternate", "Arial Narrow", sans-serif';
+      ctx.fillText(String(Math.ceil(countdownMs / 1000)), width / 2, height - 48);
+    }
+  }
+
+
+  function frame(now) {
+    var dtMs = lastFrame === null ? 0 : Math.min(now - lastFrame, MAX_FRAME_MS);
+    lastFrame = now;
+
+    if (phase === "countdown") {
+      countdownMs -= dtMs;
+      if (countdownMs <= 0) phase = "running";
+      refreshTexts();
+    } else if (phase === "running") {
+      moveShip(dtMs / 1000);
+      elapsedMs += dtMs;
+      recordSamples();
+      if (samples.length >= totalSamples()) finishTest();
+      else refreshTexts();
+    }
+    draw();
+    window.requestAnimationFrame(frame);
+  }
+
+
+  function trackPointer(event) {
+    var box = canvas.getBoundingClientRect();
+    cursor.x = event.clientX - box.left;
+    cursor.y = event.clientY - box.top;
+    cursor.inside = cursor.x >= 0 && cursor.y >= 0 && cursor.x <= box.width && cursor.y <= box.height;
+  }
+
+  canvas.addEventListener("pointermove", trackPointer);
+  canvas.addEventListener("pointerdown", trackPointer);
+  canvas.addEventListener("pointerenter", trackPointer);
+  canvas.addEventListener("pointerleave", function () { cursor.inside = false; });
+  canvas.addEventListener("pointercancel", function () { cursor.inside = false; });
+  startButton.addEventListener("click", startTest);
+
+  function onResize() { resize(); reportHeight(); }
+  if (window.ResizeObserver) new ResizeObserver(onResize).observe(canvas);
+  else window.addEventListener("resize", onResize);
+
+  resize();
+  refreshTexts();
+  window.requestAnimationFrame(frame);
+  send("streamlit:componentReady", { apiVersion: 1 });
+  reportHeight();
+})();
+</script>
+</body>
+</html>
