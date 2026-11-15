@@ -1,4 +1,3 @@
-"""Owner: backend developer 2 (analytics; NumPy + Statistics + Pandas)."""
 import unittest
 from datetime import date, datetime
 
