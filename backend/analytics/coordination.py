@@ -1,4 +1,4 @@
-"""Owner: backend developer 2 (analytics; NumPy + Statistics)."""
+
 from __future__ import annotations
 
 import statistics
