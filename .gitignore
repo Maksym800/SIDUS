@@ -13,3 +13,4 @@ backend/diagnosis/*.new
 
 .vscode/
 .idea/
+README.md
