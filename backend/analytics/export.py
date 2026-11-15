@@ -1,4 +1,4 @@
-"""Owner: backend developer 2 (analytics; Pandas)."""
+
 from __future__ import annotations
 
 from typing import Callable
