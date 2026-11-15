@@ -1,4 +1,3 @@
-"""Owner: data engineer (Pandas + SQLite)."""
 import os
 import tempfile
 import unittest
