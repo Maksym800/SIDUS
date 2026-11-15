@@ -1,4 +1,3 @@
-"""Owner: backend developer 1 (diagnosis engine)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
