@@ -1,4 +1,3 @@
-/* Owner: backend developer 1 (diagnosis engine, C part). */
 #ifndef ASTRO_DIAGNOSIS_H
 #define ASTRO_DIAGNOSIS_H
 
