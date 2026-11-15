@@ -1,4 +1,3 @@
-"""Owner: frontend developer (Streamlit)."""
 from __future__ import annotations
 
 from frontend import ui
