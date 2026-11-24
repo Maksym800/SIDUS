@@ -1,4 +1,3 @@
-
 #include "diagnosis.h"
 
 #include <math.h>
